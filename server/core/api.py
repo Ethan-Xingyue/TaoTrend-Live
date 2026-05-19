@@ -1743,3 +1743,416 @@ def api_export_predict(request):
     for s in payload.get('suggestions', []):
         writer.writerow([s])
     return response
+
+
+# ============================================================
+# 管理端 API
+# ============================================================
+
+def _require_admin(request):
+    """检查管理员登录状态（复用 session，admin=True）"""
+    if not request.session.get('admin'):
+        return None, JsonResponse({'code': 401, 'msg': '未登录管理后台'}, status=401)
+    return request.session.get('admin_user', 'admin'), None
+
+
+def admin_login(request):
+    """管理员登录"""
+    if request.method != 'POST':
+        return JsonResponse({'code': 1, 'msg': 'POST required'}, status=405)
+    body = _parse_body(request)
+    username = body.get('username', '').strip()
+    password = body.get('password', '').strip()
+    # 简单验证：admin/admin888 或 root/root
+    if (username == 'admin' and password == 'admin888') or \
+       (username == 'root' and password == 'root'):
+        request.session['admin'] = True
+        request.session['admin_user'] = username
+        return JsonResponse({'code': 0, 'msg': '登录成功', 'username': username})
+    return JsonResponse({'code': 1, 'msg': '用户名或密码错误'})
+
+
+def admin_logout(request):
+    """管理员登出"""
+    request.session.pop('admin', None)
+    request.session.pop('admin_user', None)
+    return JsonResponse({'code': 0, 'msg': '已退出'})
+
+
+def admin_check(request):
+    """检查登录状态"""
+    if request.session.get('admin'):
+        return JsonResponse({'code': 0, 'logged_in': True, 'username': request.session.get('admin_user')})
+    return JsonResponse({'code': 0, 'logged_in': False})
+
+
+# ---------- 数据统计 ----------
+
+def admin_dashboard(request):
+    """管理端数据大屏"""
+    user, err = _require_admin(request)
+    if err:
+        return err
+
+    total_users = models.UserAccount.objects.count()
+    total_products = models.Product.objects.count()
+    total_anchors = models.Anchor.objects.count()
+    total_streams = models.LiveStream.objects.count()
+    total_gmv = models.LiveStream.objects.aggregate(gmv=Sum('gmv'))['gmv'] or 0
+    total_favorites = models.FavoriteList.objects.count()
+    total_browse = models.BrowseLog.objects.count()
+
+    # 今日数据
+    today = timezone.now().date()
+    today_streams = models.LiveStream.objects.filter(start_at__date=today).count()
+    today_gmv = models.LiveStream.objects.filter(start_at__date=today).aggregate(gmv=Sum('gmv'))['gmv'] or 0
+
+    # 近7天GMV趋势
+    gmv_trend = []
+    for i in range(6, -1, -1):
+        d = today - timedelta(days=i)
+        day_gmv = models.LiveStream.objects.filter(
+            start_at__date=d
+        ).aggregate(gmv=Sum('gmv'))['gmv'] or 0
+        gmv_trend.append({'date': d.isoformat(), 'gmv': float(day_gmv)})
+
+    # 平台分布
+    platform_dist = list(
+        models.LiveStream.objects.values('platform')
+        .annotate(count=Count('id'), gmv=Sum('gmv'))
+        .order_by('-gmv')
+    )
+
+    return JsonResponse({
+        'code': 0,
+        'stats': {
+            'total_users': total_users,
+            'total_products': total_products,
+            'total_anchors': total_anchors,
+            'total_streams': total_streams,
+            'total_gmv': float(total_gmv),
+            'total_favorites': total_favorites,
+            'total_browse': total_browse,
+            'today_streams': today_streams,
+            'today_gmv': float(today_gmv),
+        },
+        'gmv_trend': gmv_trend,
+        'platform_dist': platform_dist,
+    })
+
+
+# ---------- 用户管理 ----------
+
+def admin_user_list(request):
+    """用户列表（分页 + 搜索）"""
+    user, err = _require_admin(request)
+    if err:
+        return err
+
+    page = _int_param(request, 'page', 1)
+    size = _int_param(request, 'size', 20)
+    keyword = request.GET.get('keyword', '').strip()
+
+    qs = models.UserAccount.objects.all()
+    if keyword:
+        qs = qs.filter(Q(user_id__icontains=keyword) | Q(user_name__icontains=keyword))
+
+    total = qs.count()
+    users = qs.order_by('-created_at')[(page - 1) * size: page * size]
+
+    return JsonResponse({
+        'code': 0,
+        'total': total,
+        'page': page,
+        'size': size,
+        'list': [
+            {
+                'user_id': u.user_id,
+                'user_name': u.user_name,
+                'avatar_seed': u.avatar_seed,
+                'created_at': u.created_at.isoformat() if u.created_at else None,
+                'favorites_count': u.favorites.count(),
+                'browse_count': u.browse_logs.count(),
+            }
+            for u in users
+        ],
+    })
+
+
+def admin_user_delete(request, user_id):
+    """删除用户"""
+    if request.method != 'DELETE':
+        return JsonResponse({'code': 1, 'msg': 'DELETE required'}, status=405)
+    user, err = _require_admin(request)
+    if err:
+        return err
+
+    try:
+        u = models.UserAccount.objects.get(user_id=user_id)
+        u.delete()
+        return JsonResponse({'code': 0, 'msg': '删除成功'})
+    except models.UserAccount.DoesNotExist:
+        return JsonResponse({'code': 1, 'msg': '用户不存在'})
+
+
+# ---------- 商品管理 ----------
+
+def admin_product_list(request):
+    """商品列表（分页 + 搜索 + 分类筛选）"""
+    user, err = _require_admin(request)
+    if err:
+        return err
+
+    page = _int_param(request, 'page', 1)
+    size = _int_param(request, 'size', 20)
+    keyword = request.GET.get('keyword', '').strip()
+    category_id = request.GET.get('category_id')
+
+    qs = models.Product.objects.select_related('category').all()
+    if keyword:
+        qs = qs.filter(Q(name__icontains=keyword) | Q(brand__icontains=keyword))
+    if category_id:
+        qs = qs.filter(category_id=category_id)
+
+    total = qs.count()
+    products = qs.order_by('-sales')[(page - 1) * size: page * size]
+
+    return JsonResponse({
+        'code': 0,
+        'total': total,
+        'page': page,
+        'size': size,
+        'list': [
+            {
+                'id': p.id,
+                'name': p.name,
+                'category_id': p.category_id,
+                'category_name': p.category.name if p.category else '',
+                'brand': p.brand,
+                'price': float(p.price),
+                'sales': p.sales,
+                'rating': p.rating,
+                'created_at': p.created_at.isoformat() if p.created_at else None,
+            }
+            for p in products
+        ],
+    })
+
+
+def admin_product_update(request, product_id):
+    """更新商品"""
+    if request.method != 'PUT':
+        return JsonResponse({'code': 1, 'msg': 'PUT required'}, status=405)
+    user, err = _require_admin(request)
+    if err:
+        return err
+
+    try:
+        p = models.Product.objects.get(id=product_id)
+    except models.Product.DoesNotExist:
+        return JsonResponse({'code': 1, 'msg': '商品不存在'})
+
+    body = _parse_body(request)
+    if 'name' in body:
+        p.name = body['name']
+    if 'brand' in body:
+        p.brand = body['brand']
+    if 'price' in body:
+        p.price = body['price']
+    if 'sales' in body:
+        p.sales = body['sales']
+    if 'rating' in body:
+        p.rating = body['rating']
+    if 'category_id' in body:
+        p.category_id = body['category_id']
+    p.save()
+
+    return JsonResponse({'code': 0, 'msg': '更新成功'})
+
+
+def admin_product_delete(request, product_id):
+    """删除商品"""
+    if request.method != 'DELETE':
+        return JsonResponse({'code': 1, 'msg': 'DELETE required'}, status=405)
+    user, err = _require_admin(request)
+    if err:
+        return err
+
+    try:
+        p = models.Product.objects.get(id=product_id)
+        p.delete()
+        return JsonResponse({'code': 0, 'msg': '删除成功'})
+    except models.Product.DoesNotExist:
+        return JsonResponse({'code': 1, 'msg': '商品不存在'})
+
+
+# ---------- 主播管理 ----------
+
+def admin_anchor_list(request):
+    """主播列表（分页 + 搜索）"""
+    user, err = _require_admin(request)
+    if err:
+        return err
+
+    page = _int_param(request, 'page', 1)
+    size = _int_param(request, 'size', 20)
+    keyword = request.GET.get('keyword', '').strip()
+    platform = request.GET.get('platform', '').strip()
+
+    qs = models.Anchor.objects.all()
+    if keyword:
+        qs = qs.filter(nickname__icontains=keyword)
+    if platform:
+        qs = qs.filter(platform=platform)
+
+    total = qs.count()
+    anchors = qs.order_by('-fans')[(page - 1) * size: page * size]
+
+    return JsonResponse({
+        'code': 0,
+        'total': total,
+        'page': page,
+        'size': size,
+        'list': [
+            {
+                'id': a.id,
+                'nickname': a.nickname,
+                'platform': a.platform,
+                'fans': a.fans,
+                'avg_gmv': float(a.avg_gmv),
+                'return_rate': a.return_rate,
+                'livestream_count': a.livestreams.count(),
+            }
+            for a in anchors
+        ],
+    })
+
+
+def admin_anchor_update(request, anchor_id):
+    """更新主播"""
+    if request.method != 'PUT':
+        return JsonResponse({'code': 1, 'msg': 'PUT required'}, status=405)
+    user, err = _require_admin(request)
+    if err:
+        return err
+
+    try:
+        a = models.Anchor.objects.get(id=anchor_id)
+    except models.Anchor.DoesNotExist:
+        return JsonResponse({'code': 1, 'msg': '主播不存在'})
+
+    body = _parse_body(request)
+    if 'nickname' in body:
+        a.nickname = body['nickname']
+    if 'platform' in body:
+        a.platform = body['platform']
+    if 'fans' in body:
+        a.fans = body['fans']
+    if 'avg_gmv' in body:
+        a.avg_gmv = body['avg_gmv']
+    if 'return_rate' in body:
+        a.return_rate = body['return_rate']
+    a.save()
+
+    return JsonResponse({'code': 0, 'msg': '更新成功'})
+
+
+def admin_anchor_delete(request, anchor_id):
+    """删除主播"""
+    if request.method != 'DELETE':
+        return JsonResponse({'code': 1, 'msg': 'DELETE required'}, status=405)
+    user, err = _require_admin(request)
+    if err:
+        return err
+
+    try:
+        a = models.Anchor.objects.get(id=anchor_id)
+        a.delete()
+        return JsonResponse({'code': 0, 'msg': '删除成功'})
+    except models.Anchor.DoesNotExist:
+        return JsonResponse({'code': 1, 'msg': '主播不存在'})
+
+
+# ---------- 直播管理 ----------
+
+def admin_livestream_list(request):
+    """直播列表（分页 + 搜索）"""
+    user, err = _require_admin(request)
+    if err:
+        return err
+
+    page = _int_param(request, 'page', 1)
+    size = _int_param(request, 'size', 20)
+    keyword = request.GET.get('keyword', '').strip()
+    platform = request.GET.get('platform', '').strip()
+
+    qs = models.LiveStream.objects.select_related('anchor').all()
+    if keyword:
+        qs = qs.filter(title__icontains=keyword)
+    if platform:
+        qs = qs.filter(platform=platform)
+
+    total = qs.count()
+    streams = qs.order_by('-start_at')[(page - 1) * size: page * size]
+
+    return JsonResponse({
+        'code': 0,
+        'total': total,
+        'page': page,
+        'size': size,
+        'list': [
+            {
+                'id': s.id,
+                'title': s.title,
+                'platform': s.platform,
+                'anchor_id': s.anchor_id,
+                'anchor_name': s.anchor.nickname if s.anchor else '',
+                'start_at': s.start_at.isoformat() if s.start_at else None,
+                'duration_min': s.duration_min,
+                'peak_audience': s.peak_audience,
+                'gmv': float(s.gmv),
+                'conversion_rate': s.conversion_rate,
+            }
+            for s in streams
+        ],
+    })
+
+
+def admin_livestream_delete(request, live_id):
+    """删除直播"""
+    if request.method != 'DELETE':
+        return JsonResponse({'code': 1, 'msg': 'DELETE required'}, status=405)
+    user, err = _require_admin(request)
+    if err:
+        return err
+
+    try:
+        s = models.LiveStream.objects.get(id=live_id)
+        s.delete()
+        return JsonResponse({'code': 0, 'msg': '删除成功'})
+    except models.LiveStream.DoesNotExist:
+        return JsonResponse({'code': 1, 'msg': '直播不存在'})
+
+
+# ---------- 品类管理 ----------
+
+def admin_category_list(request):
+    """品类列表"""
+    user, err = _require_admin(request)
+    if err:
+        return err
+
+    categories = models.Category.objects.all().order_by('id')
+    return JsonResponse({
+        'code': 0,
+        'list': [
+            {
+                'id': c.id,
+                'name': c.name,
+                'parent_id': c.parent_id,
+                'icon_glyph': c.icon_glyph,
+                'product_count': c.products.count(),
+            }
+            for c in categories
+        ],
+    })

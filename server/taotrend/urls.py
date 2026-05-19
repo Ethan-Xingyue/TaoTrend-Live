@@ -62,4 +62,21 @@ urlpatterns = [
     path('api/export/anchors.csv', api.api_export_anchors),
     path('api/export/livestreams.csv', api.api_export_livestreams),
     path('api/export/predict.csv', api.api_export_predict),
+
+    # ----- 管理端 API -----
+    path('api/admin/login/', api.admin_login),
+    path('api/admin/logout/', api.admin_logout),
+    path('api/admin/check/', api.admin_check),
+    path('api/admin/dashboard/', api.admin_dashboard),
+    path('api/admin/users/', api.admin_user_list),
+    path('api/admin/users/<str:user_id>/', api.admin_user_delete),
+    path('api/admin/products/', api.admin_product_list),
+    path('api/admin/products/<int:product_id>/', api.admin_product_update),
+    path('api/admin/products/<int:product_id>/delete/', api.admin_product_delete),
+    path('api/admin/anchors/', api.admin_anchor_list),
+    path('api/admin/anchors/<int:anchor_id>/', api.admin_anchor_update),
+    path('api/admin/anchors/<int:anchor_id>/delete/', api.admin_anchor_delete),
+    path('api/admin/livestreams/', api.admin_livestream_list),
+    path('api/admin/livestreams/<int:live_id>/delete/', api.admin_livestream_delete),
+    path('api/admin/categories/', api.admin_category_list),
 ]
