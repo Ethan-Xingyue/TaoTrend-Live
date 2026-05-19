@@ -1,38 +1,76 @@
 import { useState, useEffect } from 'react'
 import { Outlet, useNavigate, useLocation } from 'react-router-dom'
-import { Layout, Menu, Button, Avatar, Dropdown, message } from 'antd'
+import { Layout, Menu, Dropdown, Modal, message } from 'antd'
 import {
   DashboardOutlined,
   UserOutlined,
   ShoppingOutlined,
   VideoCameraOutlined,
-  LiveOutlined,
+  PlayCircleOutlined,
   AppstoreOutlined,
   LogoutOutlined,
-  MenuFoldOutlined,
-  MenuUnfoldOutlined,
+  DownOutlined,
 } from '@ant-design/icons'
+import type { MenuProps } from 'antd'
 import { adminCheck, adminLogout } from '../api/services'
 
 const { Header, Sider, Content } = Layout
 
-const menuItems = [
-  { key: '/admin/dashboard', icon: <DashboardOutlined />, label: '数据大屏' },
-  { key: '/admin/users', icon: <UserOutlined />, label: '用户管理' },
-  { key: '/admin/products', icon: <ShoppingOutlined />, label: '商品管理' },
-  { key: '/admin/anchors', icon: <VideoCameraOutlined />, label: '主播管理' },
-  { key: '/admin/livestreams', icon: <LiveOutlined />, label: '直播管理' },
-  { key: '/admin/categories', icon: <AppstoreOutlined />, label: '品类管理' },
+const menuItems: NonNullable<MenuProps['items']> = [
+  {
+    type: 'group',
+    label: '01 · CONTROL',
+    children: [
+      { key: '/admin/dashboard', icon: <DashboardOutlined />, label: 'DASHBOARD' },
+    ],
+  },
+  {
+    type: 'group',
+    label: '02 · CONTENT',
+    children: [
+      { key: '/admin/products', icon: <ShoppingOutlined />, label: 'PRODUCTS' },
+      { key: '/admin/anchors', icon: <VideoCameraOutlined />, label: 'ANCHORS' },
+      { key: '/admin/livestreams', icon: <PlayCircleOutlined />, label: 'LIVESTREAMS' },
+      { key: '/admin/categories', icon: <AppstoreOutlined />, label: 'CATEGORIES' },
+    ],
+  },
+  {
+    type: 'group',
+    label: '03 · ACCESS',
+    children: [
+      { key: '/admin/users', icon: <UserOutlined />, label: 'USERS' },
+    ],
+  },
 ]
 
+const titleMap: Record<string, string> = {
+  '/admin': 'DASHBOARD',
+  '/admin/dashboard': 'DASHBOARD',
+  '/admin/products': 'PRODUCTS',
+  '/admin/anchors': 'ANCHORS',
+  '/admin/livestreams': 'LIVESTREAMS',
+  '/admin/categories': 'CATEGORIES',
+  '/admin/users': 'USERS',
+}
+
 export default function AdminLayout() {
-  const [collapsed, setCollapsed] = useState(false)
   const [username, setUsername] = useState('')
+  const [now, setNow] = useState<string>(() =>
+    new Date().toLocaleTimeString('en-GB', { hour12: false }),
+  )
   const navigate = useNavigate()
   const location = useLocation()
 
   useEffect(() => {
     checkAuth()
+  }, [])
+
+  useEffect(() => {
+    const id = setInterval(
+      () => setNow(new Date().toLocaleTimeString('en-GB', { hour12: false })),
+      1000,
+    )
+    return () => clearInterval(id)
   }, [])
 
   const checkAuth = async () => {
@@ -48,49 +86,81 @@ export default function AdminLayout() {
     }
   }
 
-  const handleLogout = async () => {
-    await adminLogout()
-    message.success('已退出登录')
-    navigate('/login')
-  }
+  const confirmLogout = () =>
+    Modal.confirm({
+      title: 'SIGN OUT',
+      content: '确认退出当前管理会话？',
+      okText: 'CONFIRM',
+      cancelText: 'CANCEL',
+      onOk: async () => {
+        await adminLogout()
+        message.success('已退出登录')
+        navigate('/login')
+      },
+    })
 
-  const userMenu = {
-    items: [
-      { key: 'logout', icon: <LogoutOutlined />, label: '退出登录', onClick: handleLogout },
-    ],
-  }
+  const currentTitle = titleMap[location.pathname] ?? 'ADMIN'
 
   return (
-    <Layout style={{ minHeight: '100vh' }}>
+    <Layout style={{ minHeight: '100vh', background: 'var(--tt-bg)' }}>
       <Sider
-        trigger={null}
-        collapsible
-        collapsed={collapsed}
+        width={236}
+        theme="dark"
         style={{
-          background: '#0d0d0d',
-          borderRight: '1px solid #222',
+          overflowY: 'auto',
+          borderRight: '1px solid var(--hairline-soft)',
+          height: '100vh',
+          position: 'sticky',
+          top: 0,
+          left: 0,
+          background: 'var(--tt-bg)',
         }}
       >
         <div
           style={{
-            height: 64,
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            borderBottom: '1px solid #222',
+            padding: '24px 20px 20px',
+            borderBottom: '1px solid var(--hairline-soft)',
           }}
         >
-          <span
+          <div className="u-eyebrow" style={{ marginBottom: 6, color: 'var(--pulse-300)' }}>
+            TAOTREND · ADMIN
+          </div>
+          <div
             style={{
-              fontSize: collapsed ? 16 : 20,
+              fontFamily: 'var(--font-display)',
+              fontSize: 22,
               fontWeight: 700,
-              background: 'linear-gradient(90deg, #a855f7, #0ea5e9)',
-              WebkitBackgroundClip: 'text',
-              WebkitTextFillColor: 'transparent',
+              letterSpacing: 0.6,
+              textTransform: 'uppercase',
+              lineHeight: 1,
+              color: '#fff',
+              display: 'flex',
+              alignItems: 'center',
+              gap: 10,
             }}
           >
-            {collapsed ? 'TT' : 'TaoTrend'}
-          </span>
+            <span
+              style={{
+                display: 'inline-block',
+                width: 14,
+                height: 14,
+                borderRadius: 4,
+                background: 'linear-gradient(135deg, #a855f7, #f43f5e)',
+              }}
+            />
+            OPERATIONS
+          </div>
+          <div
+            style={{
+              marginTop: 12,
+              fontSize: 10,
+              letterSpacing: 1.4,
+              color: 'var(--ink-muted-48)',
+              textTransform: 'uppercase',
+            }}
+          >
+            v1.0 · {new Date().toISOString().slice(0, 10)}
+          </div>
         </div>
         <Menu
           theme="dark"
@@ -98,40 +168,122 @@ export default function AdminLayout() {
           selectedKeys={[location.pathname]}
           items={menuItems}
           onClick={({ key }) => navigate(key)}
-          style={{ background: 'transparent', borderRight: 0 }}
+          style={{ borderRight: 0, paddingBottom: 80, background: 'transparent' }}
         />
-      </Sider>
-      <Layout>
-        <Header
+        <div
           style={{
-            background: '#0d0d0d',
-            borderBottom: '1px solid #222',
-            padding: '0 24px',
+            position: 'absolute',
+            bottom: 0,
+            left: 0,
+            right: 0,
+            padding: '14px 20px',
+            borderTop: '1px solid var(--hairline-soft)',
+            background: 'var(--tt-bg)',
+            fontSize: 10,
+            letterSpacing: 1.4,
+            color: 'var(--ink-muted-48)',
+            textTransform: 'uppercase',
             display: 'flex',
-            alignItems: 'center',
             justifyContent: 'space-between',
           }}
         >
-          <Button
-            type="text"
-            icon={collapsed ? <MenuUnfoldOutlined /> : <MenuFoldOutlined />}
-            onClick={() => setCollapsed(!collapsed)}
-            style={{ color: '#fff' }}
-          />
-          <Dropdown menu={userMenu} placement="bottomRight">
-            <div style={{ cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 8 }}>
-              <Avatar icon={<UserOutlined />} style={{ background: '#a855f7' }} />
-              <span style={{ color: '#e0e0e0' }}>{username}</span>
+          <span>STATUS · ADMIN</span>
+          <span style={{ color: 'var(--lime-500)' }}>● ONLINE</span>
+        </div>
+      </Sider>
+
+      <Layout style={{ background: 'var(--tt-bg)' }}>
+        <Header
+          style={{
+            position: 'sticky',
+            top: 0,
+            zIndex: 10,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            height: 64,
+            paddingInline: 24,
+            background: 'rgba(10,10,13,0.75)',
+            backdropFilter: 'saturate(180%) blur(20px)',
+            WebkitBackdropFilter: 'saturate(180%) blur(20px)',
+            borderBottom: '1px solid var(--hairline-soft)',
+          }}
+        >
+          <div
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: 32,
+              flex: 1,
+              minWidth: 0,
+            }}
+          >
+            <div className="u-eyebrow" style={{ whiteSpace: 'nowrap' }}>
+              T+ {now}
             </div>
+            <div
+              style={{
+                fontFamily: 'var(--font-display)',
+                fontSize: 14,
+                fontWeight: 600,
+                letterSpacing: 1.6,
+                textTransform: 'uppercase',
+                color: 'var(--on-primary)',
+              }}
+            >
+              {currentTitle}
+            </div>
+          </div>
+          <Dropdown
+            menu={{
+              items: [
+                {
+                  key: 'logout',
+                  icon: <LogoutOutlined />,
+                  label: 'SIGN OUT',
+                  onClick: confirmLogout,
+                },
+              ],
+            }}
+          >
+            <span
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: 10,
+                cursor: 'pointer',
+                paddingLeft: 12,
+                borderLeft: '1px solid var(--hairline)',
+              }}
+            >
+              <span
+                style={{
+                  width: 28,
+                  height: 28,
+                  borderRadius: '50%',
+                  background: 'linear-gradient(135deg, #a855f7, #f43f5e)',
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  fontSize: 11,
+                  fontWeight: 700,
+                  letterSpacing: 0.5,
+                  color: '#fff',
+                }}
+              >
+                {(username || 'A').slice(0, 1).toUpperCase()}
+              </span>
+              <span className="u-eyebrow-bright" style={{ fontSize: 11 }}>
+                {username || 'ADMIN'}
+              </span>
+              <DownOutlined style={{ fontSize: 8, color: 'var(--ink-muted-80)' }} />
+            </span>
           </Dropdown>
         </Header>
         <Content
           style={{
-            margin: 24,
-            padding: 24,
-            background: '#0a0a0d',
-            minHeight: 280,
-            overflow: 'auto',
+            padding: '24px 32px 64px',
+            background: 'var(--tt-bg)',
           }}
         >
           <Outlet />
